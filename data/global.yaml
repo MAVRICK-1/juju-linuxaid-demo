@@ -1,0 +1,6 @@
+---
+linuxaid::manage_puppet: true
+linuxaid::manage_firewall: true
+linuxaid::manage_ssh: true
+linuxaid::manage_ntp: true
+linuxaid::exporters::node: true

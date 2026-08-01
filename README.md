@@ -45,18 +45,14 @@ sudo systemctl status puppetserver
 
 ### 1.3 Deploy LinuxAid code via r10k
 
-**Step 1: Fork the config template**
-
-Go to https://github.com/Obmondo/linuxaid-config-template and fork it under your GitHub account. This is your GitOps source — every change you push here is applied to your nodes.
-
-**Step 2: Install r10k**
+**Step 1: Install r10k**
 
 ```bash
 sudo apt install -y git ruby ruby-dev
 sudo gem install r10k
 ```
 
-**Step 3: Configure r10k**
+**Step 2: Configure r10k**
 
 ```bash
 sudo mkdir -p /etc/puppetlabs/r10k
@@ -64,19 +60,19 @@ sudo tee /etc/puppetlabs/r10k/r10k.yaml <<EOF
 cachedir: /var/cache/r10k
 sources:
   linuxaid:
-    remote: https://github.com/<YOUR-GITHUB-USERNAME>/linuxaid-config-template.git
+    remote: https://github.com/MAVRICK-1/juju-linuxaid-demo.git
     basedir: /etc/puppetlabs/code/environments
 EOF
 ```
 
-**Step 4: Deploy the environment**
+**Step 3: Deploy the environment**
 
 ```bash
 # This pulls the `production` branch and installs all modules in Puppetfile
 sudo r10k deploy environment production -v
 ```
 
-**Step 5: Configure global.yaml for your nodes**
+**Step 4: Configure global.yaml for your nodes**
 
 `global.yaml` is the top-level config that controls which LinuxAid modules are enabled across all nodes.
 
@@ -96,13 +92,13 @@ linuxaid::manage_ntp: true
 linuxaid::exporters::node: true
 ```
 
-**Step 6: Verify modules loaded**
+**Step 5: Verify modules loaded**
 
 ```bash
 sudo ls /etc/puppetlabs/code/environments/production/modules/
 ```
 
-> **GitOps flow:** Edit `global.yaml` or node configs in your fork → push to GitHub → run `sudo r10k deploy environment production -v` on EC2 → changes applied on next puppet run on nodes (default every 30 min).
+> **GitOps flow:** Edit `data/global.yaml` or node configs in `MAVRICK-1/juju-linuxaid-demo` → push to GitHub → run `sudo r10k deploy environment production -v` on EC2 → changes applied on next puppet run on nodes (default every 30 min).
 
 ### 1.4 Configure autosign (demo only)
 
