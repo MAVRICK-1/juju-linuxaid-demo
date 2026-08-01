@@ -35,12 +35,12 @@ sudo apt update
 # Install OpenVox Server
 sudo apt install -y openvox-server
 
-# Start and enable
-sudo systemctl start openvox-server
-sudo systemctl enable openvox-server
+# Start and enable (service is named puppetserver, not openvox-server)
+sudo systemctl start puppetserver
+sudo systemctl enable puppetserver
 
 # Verify
-sudo systemctl status openvox-server
+sudo systemctl status puppetserver
 ```
 
 ### 1.3 Deploy LinuxAid code
