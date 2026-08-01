@@ -46,6 +46,10 @@ sudo systemctl status puppetserver
 
 ### 1.3 Deploy LinuxAid code via r10k
 
+LinuxAid uses **two separate repos**:
+- `MAVRICK-1/juju-linuxaid-demo` — **hiera data only** (`global.yaml` + `agents/*.yaml`)
+- `Obmondo/LinuxAid` — **puppet code** (modules, site.pp, ENC)
+
 **Step 1: Install r10k**
 
 ```bash
@@ -53,53 +57,69 @@ sudo apt install -y git ruby ruby-dev
 sudo gem install r10k
 ```
 
-**Step 2: Configure r10k**
+**Step 2: Configure r10k with both sources**
 
 ```bash
 sudo mkdir -p /etc/puppetlabs/r10k
 sudo tee /etc/puppetlabs/r10k/r10k.yaml <<EOF
 cachedir: /var/cache/r10k
 sources:
-  linuxaid:
-    remote: https://github.com/MAVRICK-1/juju-linuxaid-demo.git
+  linuxaid_code:
+    remote: https://github.com/Obmondo/LinuxAid.git
     basedir: /etc/puppetlabs/code/environments
+  linuxaid_data:
+    remote: https://github.com/MAVRICK-1/juju-linuxaid-demo.git
+    basedir: /etc/puppetlabs/code/hieradata
 EOF
 ```
 
-**Step 3: Deploy the environment**
+**Step 3: Deploy both environments**
 
 ```bash
-# This pulls the `production` branch and installs all modules in Puppetfile
 sudo r10k deploy environment production -v
+sudo ls /etc/puppetlabs/code/environments/production/modules/enableit/
+# Should list: common, role, profile, monitor, ...
 ```
 
-**Step 4: Configure global.yaml for your nodes**
+**Step 4: Node file — `agents/node-1.demo.yaml`**
 
-`global.yaml` is the top-level config that controls which LinuxAid modules are enabled across all nodes.
-
-```bash
-sudo cat /etc/puppetlabs/code/environments/production/data/global.yaml
-```
-
-Minimal working config — edit as needed:
+Each node gets a file in `agents/` with the roles to apply:
 
 ```yaml
-# /etc/puppetlabs/code/environments/production/data/global.yaml
+# agents/node-1.demo.yaml
 ---
-linuxaid::manage_puppet: true
-linuxaid::manage_firewall: true
-linuxaid::manage_ssh: true
-linuxaid::manage_ntp: true
-linuxaid::exporters::node: true
+classes:
+  - role::basic
 ```
 
-**Step 5: Verify modules loaded**
+`role::basic` gives every node: SSH hardening, firewall, NTP, node_exporter, iptables_exporter.
+
+**Step 5: global.yaml — shared config across all nodes**
+
+```yaml
+# data/global.yaml
+---
+common::monitor::exporter::enable: true
+common::monitor::exporter::node::enable: true       # CPU/RAM/disk metrics on :9100
+common::monitor::exporter::iptables::enable: true   # firewall metrics
+common::monitor::exporter::blackbox::enable: true   # HTTP/TCP probing
+common::system::time::manage_ntp: true
+```
+
+**Step 6: Configure ENC**
 
 ```bash
-sudo ls /etc/puppetlabs/code/environments/production/modules/
+sudo tee -a /etc/puppetlabs/puppet/puppet.conf <<EOF
+
+[server]
+node_terminus = exec
+external_nodes = /etc/puppetlabs/code/environments/production/puppet_enc.rb
+EOF
+
+sudo systemctl restart puppetserver
 ```
 
-> **GitOps flow:** Edit `data/global.yaml` or node configs in `MAVRICK-1/juju-linuxaid-demo` → push to GitHub → run `sudo r10k deploy environment production -v` on EC2 → changes applied on next puppet run on nodes (default every 30 min).
+> **GitOps flow:** Edit `data/global.yaml` or `agents/<node>.yaml` → push to `MAVRICK-1/juju-linuxaid-demo` → run `sudo r10k deploy environment production -v` on EC2 → changes applied on next puppet run (every 30 min).
 
 ### 1.4 Configure autosign (demo only)
 
@@ -111,9 +131,18 @@ echo '*' | sudo tee /etc/puppetlabs/puppet/autosign.conf
 sudo systemctl restart puppetserver
 ```
 
----
+### 1.5 Note the EC2 hostname (needed by nodes)
 
-## Part 2 — Hetzner VMs
+Puppet TLS cert is issued to the EC2 **internal hostname**, not the IP. Find it:
+
+```bash
+sudo openssl x509 -in /etc/puppetlabs/puppet/ssl/ca/ca_crt.pem -text -noout | grep "Subject:"
+# Example: CN = Puppet CA: ip-172-31-17-41.us-east-2.compute.internal
+```
+
+Note this hostname — nodes need it to connect.
+
+---
 
 ### 2.1 Create VMs in Hetzner Cloud console
 
@@ -147,18 +176,40 @@ Run on **both node-1 and node-2** (change `--certname` for each):
 # SSH into node
 ssh -i ~/.ssh/hetzner root@<NODE-IP>
 
-# Install LinuxAid CLI
-# jq is required — install it first
+# Install prereqs
 sudo apt update && sudo apt install -y jq
+
+# Install LinuxAid CLI
 curl -sSL https://raw.githubusercontent.com/Obmondo/linuxaid-cli/main/install.sh | bash
 
-# Run linuxaid-install pointing to your EC2 OpenVox server
+# Install openvox-agent (puppet binary required by linuxaid-install)
+wget https://apt.voxpupuli.org/openvox8-release-ubuntu24.04.deb
+sudo dpkg -i openvox8-release-ubuntu24.04.deb
+sudo apt update && sudo apt install -y openvox-agent
+
+# Puppet TLS cert is issued to EC2 internal hostname, not public IP
+# Map EC2 public IP → internal hostname so TLS verification passes
+echo "<EC2-PUBLIC-IP>  <EC2-INTERNAL-HOSTNAME>" | sudo tee -a /etc/hosts
+# Example: echo "3.143.246.44  ip-172-31-17-41.us-east-2.compute.internal" | sudo tee -a /etc/hosts
+
+# Configure puppet.conf
+sudo tee /etc/puppetlabs/puppet/puppet.conf <<EOF
+[main]
+certname = node-1.demo
+server = <EC2-INTERNAL-HOSTNAME>
+masterport = 8140
+EOF
+
+# Run linuxaid-install (pass IP:port — linuxaid checks port 443 by default without port)
 linuxaid-install \
   --certname node-1.demo \
-  --puppet-server <EC2-PUBLIC-IP>
+  --puppet-server <EC2-PUBLIC-IP>:8140
 
 # First puppet run
-linuxaid-cli run-openvox --certname node-1.demo
+sudo /opt/puppetlabs/bin/puppet agent --test \
+  --server <EC2-INTERNAL-HOSTNAME> \
+  --masterport 8140 \
+  --no-daemonize
 ```
 
 > **What LinuxAid does on the node:**

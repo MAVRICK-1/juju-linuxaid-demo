@@ -1,6 +1,26 @@
 ---
-linuxaid::manage_puppet: true
-linuxaid::manage_firewall: true
-linuxaid::manage_ssh: true
-linuxaid::manage_ntp: true
-linuxaid::exporters::node: true
+# LinuxAid monitoring configuration
+# These Hiera keys map to the common:: module in LinuxAid
+
+# Core management
+common::manage_puppet: true
+common::manage_firewall: true
+common::manage_ssh: true
+common::system::time::manage_ntp: true
+
+# Prometheus exporters
+common::monitor::exporter::enable: true
+
+# node_exporter — CPU, RAM, disk, network metrics
+common::monitor::exporter::node::enable: true
+
+# iptables_exporter — firewall rule metrics
+common::monitor::exporter::iptables::enable: true
+
+# blackbox_exporter — HTTP/TCP endpoint probing
+common::monitor::exporter::blackbox::enable: true
+common::monitor::exporter::blackbox::listen_port: 63315
+
+# Prometheus install config
+common::monitor::prometheus::install_method: package
+common::monitor::prometheus::bin_dir: "/opt/obmondo/bin"

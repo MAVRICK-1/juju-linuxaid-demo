@@ -1,0 +1,9 @@
+---
+classes:
+  - role::basic
+
+# Enable monitoring exporters
+common::monitor::exporter::node::enable: true
+common::monitor::exporter::iptables::enable: true
+common::monitor::exporter::systemd::enable: true
+common::monitor::exporter::process::enable: true
