@@ -43,24 +43,66 @@ sudo systemctl enable puppetserver
 sudo systemctl status puppetserver
 ```
 
-### 1.3 Deploy LinuxAid code
+### 1.3 Deploy LinuxAid code via r10k
+
+**Step 1: Fork the config template**
+
+Go to https://github.com/Obmondo/linuxaid-config-template and fork it under your GitHub account. This is your GitOps source — every change you push here is applied to your nodes.
+
+**Step 2: Install r10k**
 
 ```bash
-# Install git and r10k
-sudo apt install -y git
+sudo apt install -y git ruby ruby-dev
 sudo gem install r10k
+```
 
-# Clone LinuxAid config template
-cd /etc/puppetlabs/code/environments
-sudo git clone https://github.com/Obmondo/linuxaid-config-template.git production
+**Step 3: Configure r10k**
 
-# Install modules via r10k
-cd /etc/puppetlabs/code/environments/production
-sudo r10k puppetfile install
+```bash
+sudo mkdir -p /etc/puppetlabs/r10k
+sudo tee /etc/puppetlabs/r10k/r10k.yaml <<EOF
+cachedir: /var/cache/r10k
+sources:
+  linuxaid:
+    remote: https://github.com/<YOUR-GITHUB-USERNAME>/linuxaid-config-template.git
+    basedir: /etc/puppetlabs/code/environments
+EOF
+```
 
-# Verify modules loaded
+**Step 4: Deploy the environment**
+
+```bash
+# This pulls the `production` branch and installs all modules in Puppetfile
+sudo r10k deploy environment production -v
+```
+
+**Step 5: Configure global.yaml for your nodes**
+
+`global.yaml` is the top-level config that controls which LinuxAid modules are enabled across all nodes.
+
+```bash
+sudo cat /etc/puppetlabs/code/environments/production/data/global.yaml
+```
+
+Minimal working config — edit as needed:
+
+```yaml
+# /etc/puppetlabs/code/environments/production/data/global.yaml
+---
+linuxaid::manage_puppet: true
+linuxaid::manage_firewall: true
+linuxaid::manage_ssh: true
+linuxaid::manage_ntp: true
+linuxaid::exporters::node: true
+```
+
+**Step 6: Verify modules loaded**
+
+```bash
 sudo ls /etc/puppetlabs/code/environments/production/modules/
 ```
+
+> **GitOps flow:** Edit `global.yaml` or node configs in your fork → push to GitHub → run `sudo r10k deploy environment production -v` on EC2 → changes applied on next puppet run on nodes (default every 30 min).
 
 ### 1.4 Configure autosign (demo only)
 
@@ -69,7 +111,7 @@ sudo ls /etc/puppetlabs/code/environments/production/modules/
 echo '*' | sudo tee /etc/puppetlabs/puppet/autosign.conf
 
 # Restart server
-sudo systemctl restart openvox-server
+sudo systemctl restart puppetserver
 ```
 
 ---
