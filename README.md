@@ -1,12 +1,31 @@
 # LinuxAid + Juju + MicroK8s Demo
 
-Full stack demo: LinuxAid manages the OS, Juju deploys Kubernetes on top.
+> **Talk:** "Kubernetes Is Not a Platform: Building One with Juju"
+> **Stack:** LinuxAid (OS layer) → Juju (K8s deployment) → MicroK8s → KubeAid (monitoring)
+
+## Architecture
 
 ```
-EC2 (OpenVox Server)
-        ↓  signs certs + delivers config
-Hetzner node-1  <--  LinuxAid (OS hardened)  <--  Juju (k8s control plane)
-Hetzner node-2  <--  LinuxAid (OS hardened)  <--  Juju (k8s worker)
+                    EC2 (OpenVox Server :8140)
+                    ├── puppet code  ← github.com/Obmondo/LinuxAid
+                    └── hiera data   ← github.com/MAVRICK-1/juju-linuxaid-demo
+                               │
+               ┌───────────────┴───────────────┐
+               ▼                               ▼
+      Hetzner node-1 (CX32)          Hetzner node-2 (CX22)
+      LinuxAid → OS hardened         LinuxAid → OS hardened
+      exporters: node, iptables,     exporters: node, iptables,
+                 systemd, process               systemd, process
+      Juju agent                     Juju agent
+      MicroK8s control plane         MicroK8s worker
+               │
+               ▼
+      MicroK8s cluster
+      └── KubeAid (ArgoCD)
+          └── prometheus-linuxaid
+              ├── Prometheus   ← scrapes exporters from all nodes
+              ├── Grafana      ← dashboards at grafana-linuxaid.<domain>
+              └── AlertManager
 ```
 
 ---
@@ -15,184 +34,173 @@ Hetzner node-2  <--  LinuxAid (OS hardened)  <--  Juju (k8s worker)
 
 ### 1.1 Launch EC2 instance
 
-- AMI: Ubuntu 24.04 LTS
-- Instance type: t3.medium (2 vCPU, 4GB RAM)
-- Security group — open inbound ports:
-  - `8140/tcp` — OpenVox agent communication (puppet catalog + cert signing)
-  - `443/tcp` — OpenVox status API check by linuxaid-install
-  - `22/tcp` — SSH
+- AMI: **Ubuntu 24.04 LTS**
+- Instance type: **t3.medium** (2 vCPU, 4 GB RAM)
+- Security group inbound rules:
+
+| Port | Protocol | Purpose |
+|------|----------|---------|
+| 22 | TCP | SSH |
+| 8140 | TCP | OpenVox agent ↔ server (catalog + cert signing) |
+| 443 | TCP | linuxaid-install compatibility check |
 
 ### 1.2 Install OpenVox Server
 
 ```bash
-# SSH into EC2
 ssh -i your-key.pem ubuntu@<EC2-PUBLIC-IP>
 
-# Add OpenVox repo (note: no hyphen before ubuntu)
+# Add OpenVox apt repo (no hyphen before ubuntu in filename)
 wget https://apt.voxpupuli.org/openvox8-release-ubuntu24.04.deb
 sudo dpkg -i openvox8-release-ubuntu24.04.deb
-sudo apt update
+sudo apt update && sudo apt install -y openvox-server
 
-# Install OpenVox Server
-sudo apt install -y openvox-server
-
-# Start and enable (service is named puppetserver, not openvox-server)
+# The systemd service is named 'puppetserver', not 'openvox-server'
 sudo systemctl start puppetserver
 sudo systemctl enable puppetserver
-
-# Verify
 sudo systemctl status puppetserver
 ```
 
-### 1.3 Deploy LinuxAid code via r10k
+### 1.3 Deploy LinuxAid puppet code via r10k
 
-LinuxAid uses **two separate repos**:
-- `MAVRICK-1/juju-linuxaid-demo` — **hiera data only** (`global.yaml` + `agents/*.yaml`)
-- `Obmondo/LinuxAid` — **puppet code** (modules, site.pp, ENC)
+LinuxAid splits puppet code and hiera config into **two separate repos**:
 
-**Step 1: Install r10k**
+| Repo | Role | Contents |
+|------|------|----------|
+| `Obmondo/LinuxAid` | Puppet code | Modules, site.pp, ENC |
+| `MAVRICK-1/juju-linuxaid-demo` | Hiera data | `global.yaml`, `agents/*.yaml` |
 
 ```bash
+# Install r10k
 sudo apt install -y git ruby ruby-dev
 sudo gem install r10k
-```
 
-**Step 2: Configure r10k with both sources**
-
-```bash
+# Configure r10k to pull puppet code from LinuxAid
 sudo mkdir -p /etc/puppetlabs/r10k
 sudo tee /etc/puppetlabs/r10k/r10k.yaml <<EOF
 cachedir: /var/cache/r10k
 sources:
-  linuxaid_code:
+  code:
     remote: https://github.com/Obmondo/LinuxAid.git
     basedir: /etc/puppetlabs/code/environments
-  linuxaid_data:
-    remote: https://github.com/MAVRICK-1/juju-linuxaid-demo.git
-    basedir: /etc/puppetlabs/code/hieradata
 EOF
+
+# Fix permissions (puppetserver runs as 'puppet' user)
+sudo chown -R puppet:puppet /etc/puppetlabs/code/environments
+sudo chmod -R 755 /etc/puppetlabs/code/environments
+
+# Deploy — LinuxAid uses 'master' branch (maps to 'master' environment)
+sudo r10k deploy environment master -v
+
+# Verify modules loaded
+sudo ls /etc/puppetlabs/code/environments/master/modules/enableit/
 ```
 
-**Step 3: Deploy both environments**
+### 1.4 Set up hiera config repo
 
 ```bash
-sudo r10k deploy environment production -v
-sudo ls /etc/puppetlabs/code/environments/production/modules/enableit/
-# Should list: common, role, profile, monitor, ...
-```
+# Clone hiera data repo (your node config lives here)
+sudo git clone https://github.com/MAVRICK-1/juju-linuxaid-demo.git \
+  /etc/puppetlabs/code/hieradata
 
-**Step 4: Node file — `agents/node-1.demo.yaml`**
-
-Each node gets a file in `agents/` with the roles to apply:
-
-```yaml
-# agents/node-1.demo.yaml
----
-classes:
-  - role::basic
-```
-
-`role::basic` gives every node: SSH hardening, firewall, NTP, node_exporter, iptables_exporter.
-
-**Step 5: global.yaml — shared config across all nodes**
-
-```yaml
-# data/global.yaml
----
-common::monitor::exporter::enable: true
-common::monitor::exporter::node::enable: true       # CPU/RAM/disk metrics on :9100
-common::monitor::exporter::iptables::enable: true   # firewall metrics
-common::monitor::exporter::blackbox::enable: true   # HTTP/TCP probing
-common::system::time::manage_ntp: true
-```
-
-**Step 6: Configure ENC**
-
-```bash
-sudo tee -a /etc/puppetlabs/puppet/puppet.conf <<EOF
-
-[server]
-node_terminus = exec
-external_nodes = /etc/puppetlabs/code/environments/production/puppet_enc.rb
+# Configure hiera.yaml to read from it
+sudo tee /etc/puppetlabs/code/environments/master/hiera.yaml <<EOF
+version: 5
+hierarchy:
+  - name: "Node-specific"
+    path: "agents/%{trusted.certname}.yaml"
+    datadir: /etc/puppetlabs/code/hieradata
+  - name: "Global"
+    path: "global.yaml"
+    datadir: /etc/puppetlabs/code/hieradata/data
+defaults:
+  data_hash: yaml_data
 EOF
 
 sudo systemctl restart puppetserver
 ```
 
-> **GitOps flow:** Edit `data/global.yaml` or `agents/<node>.yaml` → push to `MAVRICK-1/juju-linuxaid-demo` → run `sudo r10k deploy environment production -v` on EC2 → changes applied on next puppet run (every 30 min).
-
-### 1.4 Configure autosign (demo only)
+### 1.5 Configure autosign (demo only)
 
 ```bash
-# Allow all certs to autosign — demo only, NOT for production
+# Allow all node certs to autosign — demo only, NOT for production
 echo '*' | sudo tee /etc/puppetlabs/puppet/autosign.conf
-
-# Restart server
 sudo systemctl restart puppetserver
 ```
 
-### 1.5 Note the EC2 hostname (needed by nodes)
+### 1.6 Note your EC2 internal hostname
 
-Puppet TLS cert is issued to the EC2 **internal hostname**, not the IP. Find it:
+Puppet TLS cert is issued to the **internal hostname**, not the public IP:
 
 ```bash
-sudo openssl x509 -in /etc/puppetlabs/puppet/ssl/ca/ca_crt.pem -text -noout | grep "Subject:"
+sudo openssl x509 -in /etc/puppetlabs/puppet/ssl/ca/ca_crt.pem \
+  -text -noout | grep "Subject:"
 # Example: CN = Puppet CA: ip-172-31-17-41.us-east-2.compute.internal
 ```
 
-Note this hostname — nodes need it to connect.
+Save this — nodes need it for TLS verification.
+
+### 1.7 GitOps: update node config
+
+```bash
+# On EC2 — pull latest config from GitHub and redeploy
+sudo git -C /etc/puppetlabs/code/hieradata pull
+sudo r10k deploy environment master -v
+```
+
+> **GitOps flow:** Edit `data/global.yaml` or `agents/<node>.yaml` →
+> push to GitHub → run the two commands above on EC2 →
+> nodes pick up changes on next puppet run (every 30 min).
 
 ---
 
+## Part 2 — Hetzner VMs
+
 ### 2.1 Create VMs in Hetzner Cloud console
 
-| Name | Type | OS | Role |
-|------|------|----|------|
-| node-1 | CX32 | Ubuntu 24.04 | k8s control plane |
-| node-2 | CX22 | Ubuntu 24.04 | k8s worker |
+| Name | Type | vCPU | RAM | OS | Role |
+|------|------|------|-----|----|------|
+| node-1 | CX32 | 4 | 8 GB | Ubuntu 24.04 | K8s control plane |
+| node-2 | CX22 | 2 | 4 GB | Ubuntu 24.04 | K8s worker |
 
 - Location: Nuremberg (nbg1)
-- Add your SSH public key:
+- SSH key:
   ```bash
   ssh-keygen -t ed25519 -f ~/.ssh/hetzner -N ""
-  cat ~/.ssh/hetzner.pub  # paste this in Hetzner UI
+  cat ~/.ssh/hetzner.pub  # paste into Hetzner UI
   ```
-- Enable private network: create `demo-net`
 
-### 2.2 Note the IPs
+### 2.2 Fix SSH known_hosts when recreating servers
 
-```
-node-1: <NODE1-PUBLIC-IP>
-node-2: <NODE2-PUBLIC-IP>
+```bash
+ssh-keygen -f ~/.ssh/known_hosts -R '<SERVER-IP>'
+ssh -i ~/.ssh/hetzner -o StrictHostKeyChecking=no root@<SERVER-IP>
 ```
 
 ---
 
 ## Part 3 — Install LinuxAid on each node
 
-Run on **both node-1 and node-2** (change `--certname` for each):
+Run on **node-1** and **node-2** (change `--certname` for each).
 
 ```bash
-# SSH into node
 ssh -i ~/.ssh/hetzner root@<NODE-IP>
 
-# Install prereqs
+# 1. Install prereqs
 sudo apt update && sudo apt install -y jq
 
-# Install LinuxAid CLI
+# 2. Install LinuxAid CLI
 curl -sSL https://raw.githubusercontent.com/Obmondo/linuxaid-cli/main/install.sh | bash
 
-# Install openvox-agent (puppet binary required by linuxaid-install)
+# 3. Install openvox-agent (provides the puppet binary)
 wget https://apt.voxpupuli.org/openvox8-release-ubuntu24.04.deb
 sudo dpkg -i openvox8-release-ubuntu24.04.deb
 sudo apt update && sudo apt install -y openvox-agent
 
-# Puppet TLS cert is issued to EC2 internal hostname, not public IP
-# Map EC2 public IP → internal hostname so TLS verification passes
+# 4. Map EC2 internal hostname → public IP for TLS verification
 echo "<EC2-PUBLIC-IP>  <EC2-INTERNAL-HOSTNAME>" | sudo tee -a /etc/hosts
-# Example: echo "3.143.246.44  ip-172-31-17-41.us-east-2.compute.internal" | sudo tee -a /etc/hosts
+# e.g: echo "3.143.246.44  ip-172-31-17-41.us-east-2.compute.internal" | sudo tee -a /etc/hosts
 
-# Configure puppet.conf
+# 5. Configure puppet.conf
 sudo tee /etc/puppetlabs/puppet/puppet.conf <<EOF
 [main]
 certname = node-1.demo
@@ -200,31 +208,40 @@ server = <EC2-INTERNAL-HOSTNAME>
 masterport = 8140
 EOF
 
-# Run linuxaid-install (pass IP:port — linuxaid checks port 443 by default without port)
+# 6. Run linuxaid-install (pass IP:port — avoids port 443 default check)
 linuxaid-install \
   --certname node-1.demo \
   --puppet-server <EC2-PUBLIC-IP>:8140
 
-# First puppet run
+# 7. First puppet run (use master environment)
 sudo /opt/puppetlabs/bin/puppet agent --test \
   --server <EC2-INTERNAL-HOSTNAME> \
   --masterport 8140 \
+  --environment master \
   --no-daemonize
 ```
 
-> **What LinuxAid does on the node:**
-> - Installs and configures openvox-agent
-> - Hardens SSH configuration
-> - Sets up firewall rules
-> - Deploys 24 Prometheus exporters
-> - Manages package updates via service windows
-> - Enforces CIS/GDPR/NIS2 compliance defaults
+> **What LinuxAid deploys on the node (via `role::basic`):**
+> - SSH hardening
+> - Firewall rules
+> - NTP sync
+> - `node_exporter` on `:9100` — CPU, RAM, disk, network
+> - `iptables_exporter` — firewall metrics
+> - `systemd_exporter` — service health metrics
+> - `process_exporter` — per-process metrics
 
-### 3.1 Verify registered nodes (on EC2)
+### 3.1 Verify node registered (on EC2)
 
 ```bash
-sudo puppetserver ca list --all
-# Should show node-1.demo and node-2.demo
+echo "127.0.0.1  puppet" | sudo tee -a /etc/hosts
+sudo /opt/puppetlabs/bin/puppetserver ca list --all
+# Should show: node-1.demo  node-2.demo
+```
+
+### 3.2 Verify exporters running (on node)
+
+```bash
+curl http://localhost:9100/metrics | grep node_cpu
 ```
 
 ---
@@ -232,32 +249,24 @@ sudo puppetserver ca list --all
 ## Part 4 — Install Juju on node-1
 
 ```bash
-# SSH into node-1
-ssh -i ~/.ssh/hetzner root@<NODE1-PUBLIC-IP>
+ssh -i ~/.ssh/hetzner root@<NODE1-IP>
 
-# Install Juju
 snap install juju --classic
-
-# Create required directory
 mkdir -p ~/.local/share/juju
 ```
 
 ---
 
-## Part 5 — Bootstrap Juju controller
+## Part 5 — Bootstrap Juju (Hetzner provider)
 
 ```bash
-# Get Hetzner API token from:
-# https://console.hetzner.cloud -> Project -> Security -> API Tokens -> Generate
+# Get Hetzner API token:
+# https://console.hetzner.cloud → Project → Security → API Tokens → Generate
 
-# Add Hetzner credentials
 juju add-credential hetzner
 # Enter token when prompted
 
-# Bootstrap Juju controller
 juju bootstrap hetzner hetzner-controller
-
-# Verify
 juju status
 ```
 
@@ -266,7 +275,6 @@ juju status
 ## Part 6 — Deploy MicroK8s (multi-node)
 
 ```bash
-# Create k8s model
 juju add-model k8s-demo
 
 # Deploy control plane
@@ -274,38 +282,59 @@ juju deploy microk8s \
   --channel 1.28/stable \
   --base ubuntu@22.04
 
-# Watch it come up
 juju status --watch 5s
 
 # Once first unit is active, add worker
 juju add-unit microk8s
-
-# Watch worker join
 juju status --watch 5s
 ```
-
-Wait for all units to show `active`.
 
 ### 6.1 Access the cluster
 
 ```bash
 mkdir -p ~/.kube
 juju ssh microk8s/0 -- sudo microk8s config > ~/.kube/config
-
-# Verify both nodes
 kubectl get nodes
 ```
 
 Expected:
 ```
-NAME           STATUS   ROLES    AGE
-juju-xxxx-0    Ready    <none>   5m
-juju-xxxx-1    Ready    <none>   3m
+NAME          STATUS   ROLES   AGE
+juju-xxxx-0   Ready    <none>  5m
+juju-xxxx-1   Ready    <none>  3m
 ```
 
 ---
 
-## Part 7 — Deploy test workload
+## Part 7 — KubeAid + Prometheus + Grafana
+
+KubeAid deploys `prometheus-linuxaid` which scrapes all node exporters.
+
+```bash
+# Install ArgoCD via KubeAid
+kubectl create namespace argocd
+kubectl apply -n argocd \
+  -f https://raw.githubusercontent.com/Obmondo/kubeaid/master/argocd-helm-charts/argo-cd/crds.yaml
+
+# Add prometheus-linuxaid app to ArgoCD
+# (configure scrape targets pointing to node-1:9100 and node-2:9100)
+```
+
+### 7.1 Access Grafana
+
+| Service | URL |
+|---------|-----|
+| Grafana | `http://grafana-linuxaid.<your-domain>` |
+| Prometheus | `http://prometheus-linuxaid.<your-domain>` |
+| AlertManager | `http://alertmanager-linuxaid.<your-domain>` |
+
+Default credentials:
+- **User:** `root`
+- **Password:** `secretroot`
+
+---
+
+## Part 8 — Deploy test workload
 
 ```bash
 kubectl create deployment nginx --image=nginx --replicas=2
@@ -316,27 +345,37 @@ kubectl get svc
 
 ---
 
-## Full Architecture
+## Repo Structure (hiera config)
 
 ```
-                    +---------------------+
-                    |   EC2 t3.medium     |
-                    |   OpenVox Server    |
-                    |   port 8140         |
-                    +----------+----------+
-                               |
-               +---------------+---------------+
-               |                               |
-    +----------+----------+       +------------+--------+
-    |   Hetzner node-1    |       |   Hetzner node-2    |
-    |   CX32 (4 vCPU 8GB) |       |   CX22 (2 vCPU 4GB) |
-    |                     |       |                     |
-    |   LinuxAid          |       |   LinuxAid          |
-    |   (OS hardening)    |       |   (OS hardening)    |
-    |                     |       |                     |
-    |   Juju agent        |       |   Juju agent        |
-    |   MicroK8s CP       |       |   MicroK8s Worker   |
-    +---------------------+       +---------------------+
+MAVRICK-1/juju-linuxaid-demo/
+├── data/
+│   └── global.yaml          # shared config for ALL nodes
+└── agents/
+    ├── node-1.demo.yaml      # node-1 specific: classes + overrides
+    └── node-2.demo.yaml      # node-2 specific: classes + overrides
+```
+
+### data/global.yaml
+
+```yaml
+---
+common::monitor::exporter::enable: true
+common::monitor::exporter::node::enable: true       # CPU/RAM/disk on :9100
+common::monitor::exporter::iptables::enable: true
+common::monitor::exporter::systemd::enable: true
+common::monitor::exporter::process::enable: true
+common::system::time::manage_ntp: true
+```
+
+### agents/node-1.demo.yaml
+
+```yaml
+---
+classes:
+  - role::basic
+common::monitor::exporter::node::enable: true
+common::monitor::exporter::iptables::enable: true
 ```
 
 ---
@@ -346,8 +385,8 @@ kubectl get svc
 | Resource | Type | Cost/hr | 7 days |
 |----------|------|---------|--------|
 | EC2 t3.medium | AWS | ~$0.047/hr | ~$7.90 |
-| Hetzner node-1 | CX32 | €0.013/hr | ~€2.18 |
-| Hetzner node-2 | CX22 | €0.007/hr | ~€1.18 |
+| Hetzner CX32 (node-1) | Hetzner | €0.013/hr | ~€2.18 |
+| Hetzner CX22 (node-2) | Hetzner | €0.007/hr | ~€1.18 |
 | **Total** | | | **~$12** |
 
 ---
@@ -355,9 +394,8 @@ kubectl get svc
 ## Cleanup
 
 ```bash
-# Destroy Juju model
+# Juju
 juju destroy-model k8s-demo --force --no-wait
-# Type: k8s-demo
 
 # Delete Hetzner servers from Hetzner console
 # Terminate EC2 instance from AWS console
@@ -365,11 +403,28 @@ juju destroy-model k8s-demo --force --no-wait
 
 ---
 
+## Known Gotchas
+
+| Issue | Cause | Fix |
+|-------|-------|-----|
+| `openvox-server.service not found` | Service is named `puppetserver` | Use `systemctl start puppetserver` |
+| `linuxaid-install` hits port 443 | Hardcoded in CLI | Pass `IP:8140` as `--puppet-server` |
+| `hostname does not match server cert` | Cert issued to internal hostname | Add `/etc/hosts` entry mapping IP → internal hostname |
+| `r10k deploy production` fails | LinuxAid has no `production` branch | Deploy `master` branch instead |
+| `Permission denied on environments/` | Wrong ownership | `chown -R puppet:puppet /etc/puppetlabs/code/environments` |
+| Catalog applied in 0.01s (empty) | No hiera data / wrong environment | Use `--environment master`, set up hiera.yaml |
+
+---
+
 ## References
 
-- LinuxAid: https://github.com/Obmondo/LinuxAid
-- LinuxAid CLI: https://github.com/Obmondo/linuxaid-cli
-- LinuxAid Docs: https://linuxaid.io/docs
-- OpenVox: https://voxpupuli.org/openvox
-- Juju: https://juju.is/docs
-- MicroK8s Charm: https://charmhub.io/microk8s
+| Resource | URL |
+|----------|-----|
+| LinuxAid | https://github.com/Obmondo/LinuxAid |
+| LinuxAid CLI | https://github.com/Obmondo/linuxaid-cli |
+| LinuxAid Docs | https://linuxaid.io/docs |
+| OpenVox | https://voxpupuli.org/openvox |
+| Juju | https://juju.is/docs |
+| MicroK8s Charm | https://charmhub.io/microk8s |
+| KubeAid | https://github.com/Obmondo/kubeaid |
+| prometheus-linuxaid | https://github.com/Obmondo/kubeaid/tree/master/argocd-helm-charts/prometheus-linuxaid |
