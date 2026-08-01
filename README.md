@@ -18,7 +18,8 @@ Hetzner node-2  <--  LinuxAid (OS hardened)  <--  Juju (k8s worker)
 - AMI: Ubuntu 24.04 LTS
 - Instance type: t3.medium (2 vCPU, 4GB RAM)
 - Security group — open inbound ports:
-  - `8140/tcp` — OpenVox agent communication
+  - `8140/tcp` — OpenVox agent communication (puppet catalog + cert signing)
+  - `443/tcp` — OpenVox status API check by linuxaid-install
   - `22/tcp` — SSH
 
 ### 1.2 Install OpenVox Server
@@ -147,6 +148,8 @@ Run on **both node-1 and node-2** (change `--certname` for each):
 ssh -i ~/.ssh/hetzner root@<NODE-IP>
 
 # Install LinuxAid CLI
+# jq is required — install it first
+sudo apt update && sudo apt install -y jq
 curl -sSL https://raw.githubusercontent.com/Obmondo/linuxaid-cli/main/install.sh | bash
 
 # Run linuxaid-install pointing to your EC2 OpenVox server
