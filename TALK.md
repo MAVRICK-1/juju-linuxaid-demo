@@ -395,25 +395,9 @@ One philosophy. Two tools. Every layer covered.
 
 ---
 
-## Part 5 — Production Relevance
+## Part 5 — Day One vs Day Two
 
-### Slide 16 — This Is How Obmondo Runs Production
-
-Obmondo manages infrastructure for customers at scale using this exact stack:
-
-- **LinuxAid** manages every node: OS hardening, exporters, updates, compliance
-- **KubeAid** (Obmondo's Kubernetes GitOps platform) manages cluster lifecycle
-- **kube-prometheus-stack** collects metrics from LinuxAid node exporters
-- Customers get a fully observable, compliant, GitOps-driven platform on day one
-
-The LinuxAid node exporters are not an afterthought.
-They are the foundation of the observability model.
-Every Prometheus alert, every Grafana dashboard, every SLA is backed by data
-that LinuxAid installed and LinuxAid keeps running.
-
----
-
-### Slide 17 — What You Get From Day One
+### Slide 16 — What You Get From Day One
 
 A new node enrolled in this stack receives automatically:
 
@@ -435,7 +419,7 @@ A new node enrolled in this stack receives automatically:
 
 ---
 
-### Slide 18 — Comparing to the Alternative
+### Slide 17 — Comparing to the Alternative
 
 What does building this without LinuxAid and Juju look like?
 
@@ -452,7 +436,7 @@ What does building this without LinuxAid and Juju look like?
 
 ## Part 6 — Key Takeaways
 
-### Slide 19 — What to Remember
+### Slide 18 — What to Remember
 
 1. **Kubernetes is not a platform** — it is one layer of a platform.
    Every layer above it must be designed and operated deliberately.
@@ -472,7 +456,7 @@ What does building this without LinuxAid and Juju look like?
 
 ---
 
-### Slide 20 — Open Source and Community
+### Slide 19 — Open Source and Community
 
 | Project | Maintainer | Source |
 |---------|-----------|--------|
