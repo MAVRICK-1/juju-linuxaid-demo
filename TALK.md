@@ -1,7 +1,5 @@
-# Kubernetes Is Not a Platform: Building One with Juju + LinuxAid
+# Kubernetes Is Not a Platform: Building One with Juju 
 
-**Presentation Overview**
-Speaker: Rishi Mondal — SRE at Obmondo | CNCF KubeStellar Maintainer | Docker Captain
 
 ---
 
