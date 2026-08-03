@@ -365,9 +365,121 @@ juju relate my-app postgresql
 
 ---
 
-## Part 6 — Key Takeaways
+## Part 6 — Before vs After
 
-### Slide 15 — What to Remember
+### Slide 15 — Scenario: Onboard a New Node
+
+**Without this stack:**
+
+```
+Day 1   Run Ansible playbook manually to harden SSH
+Day 1   Run another playbook to install node_exporter
+Day 1   Add scrape target manually to prometheus.yml
+Day 1   Reload Prometheus — hope it picks up
+Day 2   Realise compliance was skipped — run another playbook
+Day 7   Node drifts — nobody notices
+Day 30  Audit asks for evidence of hardening — grep through bash history
+```
+
+**With LinuxAid + Juju:**
+
+```
+Day 1   Add one line to agents/node-1.yaml in Git
+        SSH hardened, firewall set, 4 exporters running, CIS applied
+        Prometheus scraping — metrics in Grafana
+Day 30  Audit: git log — every change is a commit with author and timestamp
+```
+
+---
+
+### Slide 16 — Scenario: Deploy PostgreSQL for Your App
+
+**Without Juju:**
+
+```
+Step 1   helm install postgresql bitnami/postgresql
+Step 2   kubectl get secret postgresql -o jsonpath=...  → copy password
+Step 3   kubectl create secret my-app-db-creds ...
+Step 4   Edit my-app Deployment: add env vars DB_HOST, DB_USER, DB_PASS
+Step 5   helm upgrade my-app ...
+Step 6   PostgreSQL minor upgrade → new password format → repeat steps 2–5
+Step 7   Add staging environment → repeat all of the above
+```
+
+**With Juju:**
+
+```
+juju deploy postgresql
+juju deploy my-app
+juju relate my-app postgresql   ← done
+```
+
+Juju creates the user, passes credentials through the relation,
+updates them on upgrade, and maintains the wiring in staging and production identically.
+
+---
+
+### Slide 17 — Scenario: Debug a Node at 3 AM
+
+**Without continuous OS management:**
+
+```
+Alert fires: high load on node-3
+SSH in — systemd units look fine
+Check exporters — node_exporter not running (crashed 6 hours ago, nobody knew)
+Metrics were silently missing — alert triggered on stale data
+Manual restart — metrics return — root cause still unknown
+```
+
+**With LinuxAid:**
+
+```
+Alert fires: high load on node-3
+Open Grafana — systemd_exporter shows nginx.service in failed state since 02:47
+node_exporter restarted automatically at 02:47 by LinuxAid agent run
+Root cause visible immediately — no SSH required
+```
+
+The exporter didn't disappear silently because LinuxAid reconciled it.
+The failure was visible in Prometheus because `systemd_exporter` was already there.
+
+---
+
+### Slide 18 — Scenario: Scale from 5 to 50 Nodes
+
+**Without this stack:**
+
+```
+Create 45 new VMs
+Run Ansible hardening playbook × 45
+Run Ansible exporter playbook × 45
+Update prometheus.yml with 45 new scrape targets
+Reload Prometheus
+Hope nothing was missed
+```
+
+**With LinuxAid + Juju:**
+
+```
+Provision 45 VMs → linuxaid-install on each
+                    (or cloud-init with one line)
+
+Add 45 lines to agents/ in Git
+Push → r10k deploys → all nodes converge in one agent cycle
+
+juju add-unit microk8s              × however many needed
+Prometheus auto-discovers new targets via static config update
+```
+
+Git is the source of truth.
+Nodes converge toward it.
+Scale is a commit, not a campaign.
+
+---
+
+## Part 7 — Key Takeaways
+
+### Slide 19 — What to Remember
 
 1. **Kubernetes is not a platform.**
    It handles container scheduling. Every other layer is still yours to build.
@@ -392,7 +504,7 @@ juju relate my-app postgresql
 
 ---
 
-### Slide 16 — References
+### Slide 20 — References
 
 | Resource | URL |
 |----------|-----|
