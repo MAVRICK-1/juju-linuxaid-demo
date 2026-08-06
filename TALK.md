@@ -1,214 +1,164 @@
-# Kubernetes Is Not a Platform: Building One with Juju 
-
+# Kubernetes Is Not a Platform: Building One with Juju
 
 ---
 
 ## Part 1 — The Problem
 
-### Slide 1 — Kubernetes Is Infrastructure, Not a Platform
+### Slide 1 — Congrats, You Have a Cluster. Now What?
 
-You provision a Kubernetes cluster.
-Now what?
+You provisioned Kubernetes. You feel powerful.
 
 You still don't have:
 
-| Missing piece | Why it matters |
-|---------------|---------------|
-| Hardened, observable OS on every node | Metrics, compliance, and security start at the host |
-| Day-2 ops for stateful applications | Upgrades, backups, credential rotation — all manual |
-| Wiring between applications | Every secret passed by hand, every endpoint hardcoded |
-| A coherent observability stack | You assemble Prometheus, Grafana, Loki yourself — and rewire them yourself |
+| Missing piece | Why it hurts |
+|---|---|
+| Hardened OS on every node | Security starts at the host, not the YAML |
+| Day-2 ops for stateful apps | Upgrades/backups/rotation = manual labor forever |
+| App-to-app wiring | Every secret typed by hand, every endpoint hardcoded |
+| Observability | You're now a full-time Prometheus plumber |
 
-Kubernetes gives you the floor.
-You have to build the building.
-
----
-
-### Slide 2 — How Teams Usually Fill the Gap
-
-```
-OS hardening       →  Ansible playbook (runs once, then drifts)
-Node exporters     →  Another Ansible role (maybe forgotten)
-Kubernetes         →  Cloud-managed or kubeadm (manual upgrades)
-Application deploy →  Helm (install only, day-2 is yours)
-App connections    →  Environment variables + Secrets (managed forever)
-Observability      →  Manually wired Prometheus + Grafana
-```
-
-Each layer is solved in isolation.
-Nothing talks to anything else.
-Nobody owns the full picture.
-
-The result: a platform that works until it doesn't,
-and when it doesn't, nobody knows which layer broke.
+Kubernetes gave you the floor. Enjoy building the rest of the house yourself.
 
 ---
 
-## Part 2 — Juju: Operator for Everything Above the OS
-
-### Slide 3 — What Juju Is
-
-Juju is a **model-driven application operator** by Canonical.
-
-It deploys **Charmed Operators** — software that encodes the **complete lifecycle**
-of an application, not just its installation:
+### Slide 2 — How Teams "Solve" This
 
 ```
-Install  →  Configure  →  Relate  →  Scale  →  Upgrade  →  Backup
+OS hardening      → Ansible playbook (runs once, ages like milk)
+Node exporters    → Another role (forgotten by Q2)
+K8s               → kubeadm, manually upgraded, manually feared
+App deploy        → Helm (installs great, day-2 is your problem)
+App wiring        → env vars + Secrets, hand-maintained forever
+Observability     → Prometheus + Grafana, duct-taped together
 ```
 
-All of this is expressed as a **model** — a declared state that Juju continuously
-reconciles, exactly like Kubernetes reconciles pod specs.
-
-400+ Charmed Operators on [Charmhub](https://charmhub.io):
-PostgreSQL, Kafka, OpenSearch, Vault, Grafana, and more.
+Six layers. Zero of them talk to each other.
+It works — right up until 3 AM, when nobody knows which layer broke.
 
 ---
 
-### Slide 4 — The Relation: Juju's Core Differentiator
+## Part 2 — Juju: An Operator for Everything Above the OS
 
-**The problem with Helm:**
-Deploy PostgreSQL + deploy your app + manually create a Secret +
-manually inject it as an env var + maintain it through every upgrade.
+### Slide 3 — What Juju Actually Is
 
-**With Juju:**
+Juju = Canonical's model-driven app operator.
+
+It deploys **Charmed Operators** — apps that know their *entire* lifecycle, not just "install and pray":
+
+```
+Install → Configure → Relate → Scale → Upgrade → Backup
+```
+
+400+ charms on Charmhub: PostgreSQL, Kafka, OpenSearch, Vault, Grafana...
+
+---
+
+### Slide 4 — The Relation: Juju's Party Trick
+
+**Helm way:** deploy Postgres, deploy app, hand-craft a Secret, wire it as env vars, re-do it every upgrade.
+
+**Juju way:**
 
 ```
 juju relate my-app postgresql
 ```
 
-Juju automatically:
-1. Tells PostgreSQL to create a dedicated user and database
-2. Passes credentials to `my-app` through the relation interface
-3. Keeps this wiring intact through restarts, upgrades, and scaling
+That's it. Juju creates the user, hands over credentials, and keeps the wiring alive through restarts and upgrades.
 
-No Secrets written by hand. No env vars configured manually.
-**The relation is the contract. The charm honours it.**
+No Secrets copy-pasted by a tired human at 11 PM.
 
 ---
 
-### Slide 5 — Juju vs Helm: The Day-2 Gap
+### Slide 5 — Juju vs Helm, Head to Head
 
 | Capability | Helm | Juju |
-|-----------|------|------|
+|---|---|---|
 | Install | ✅ | ✅ |
-| Upgrade | `helm upgrade` — you own values drift | `juju upgrade-charm` — charm owns it |
-| Scale | Edit replicas manually | `juju add-unit` |
-| Connect two apps | Manual secrets + env vars | `juju relate app-a app-b` |
-| Credential rotation | Edit Secret → redeploy → restart | Charm handles via relation update |
-| Run a backup | Write a CronJob yourself | `juju run postgresql/0 create-backup` |
-| Status visibility | `kubectl get pods` — infra view | `juju status` — application-aware view |
+| Upgrade | You babysit values drift | Charm owns it |
+| Scale | Edit replicas by hand | `juju add-unit` |
+| Connect two apps | Manual secrets + env vars | `juju relate` |
+| Rotate credentials | Edit → redeploy → restart | Charm handles it |
+| Backup | Write your own CronJob | `juju run postgresql/0 create-backup` |
+| Status | `kubectl get pods` (infra view) | `juju status` (app-aware) |
 
-Helm is a package manager.
-Juju is an operator framework.
-They are not competing — they operate at different depths.
+Helm is a package manager. Juju is an operator. Different sports.
 
 ---
 
-### Slide 6 — COS Lite: The Observability Charm Bundle
-
-Deploy a complete observability stack in one command:
+### Slide 6 — COS Lite: Observability in One Line
 
 ```
 juju deploy cos-lite --trust
-juju relate cos-lite microk8s     ← auto-wires cluster scraping
+juju relate cos-lite microk8s
 ```
 
-| Component | Role |
-|-----------|------|
-| Prometheus | Metrics + alert evaluation |
-| Grafana | Dashboards — datasources wired via relations |
-| Alertmanager | Alert routing + deduplication |
-| Loki | Log aggregation |
-| Traefik | Ingress for all components |
+| Piece | Job |
+|---|---|
+| Prometheus | Metrics + alerts |
+| Grafana | Dashboards, auto-wired datasources |
+| Alertmanager | Routing + dedup |
+| Loki | Logs |
+| Traefik | Ingress |
 
-**Every component is a charm.**
-Upgrades are coordinated. Datasources are wired automatically.
-Add a new application, relate it to COS Lite — its dashboards appear.
-
-No manual `prometheus.yml`. No manual Grafana datasource config.
+No hand-written `prometheus.yml`. No manual Grafana datasource clicking.
 
 ---
 
-### Slide 7 — MicroK8s as a Juju Charm
-
-Juju can also manage **Kubernetes itself** as a charmed operator:
+### Slide 7 — Juju Can Even Charm Kubernetes Itself
 
 ```
-juju deploy microk8s --channel 1.28/stable   # control plane node
-juju add-unit microk8s                        # add worker
-juju add-unit microk8s                        # add another worker
+juju deploy microk8s --channel 1.28/stable   # control plane
+juju add-unit microk8s                        # worker
+juju add-unit microk8s                        # another worker
 ```
 
-The MicroK8s charm handles:
-- Multi-node bootstrap and join token management
-- High availability control plane
-- Channel-based upgrades (`juju config microk8s channel=1.30/stable`)
-- Addons (DNS, storage, ingress) as charm config
-
-The entire Kubernetes lifecycle is now a Juju model:
-versioned in Git, reproducible on any cloud, upgraded with one command.
+Bootstrap, HA, channel upgrades, addons — all charm config.
+Your entire cluster lifecycle now lives in Git.
 
 ---
 
-## Part 3 — The Gap Juju Leaves Behind
+## Part 3 — The Gap Juju Politely Ignores
 
-### Slide 8 — What Juju Doesn't Own
+### Slide 8 — What Juju Won't Touch
 
-Juju manages Kubernetes clusters and applications running on them.
+Juju rules the cluster and the apps on it. The **OS underneath** is not its problem.
 
-It does not manage the **operating system** on the nodes.
-
-Every node underneath your cluster still needs:
+Every node still needs:
 
 ```
-SSH hardening          →  who can log in, how
-Firewall               →  what traffic is allowed at kernel level
-Automatic OS updates   →  security patches without human intervention
-Prometheus exporters   →  CPU, memory, disk, systemd health on the HOST
-Compliance posture     →  CIS benchmarks, GDPR, NIS2
+SSH hardening        → who logs in, and how
+Firewall             → kernel-level traffic rules
+Auto security updates → patches without a human awake
+Prometheus exporters → host-level CPU/mem/disk/systemd
+Compliance           → CIS, GDPR, NIS2
 ```
 
-If Juju is the top half of the stack, something needs to own the bottom half.
-
-You could write Ansible. You could use cloud-init.
-The problem: those tools run **once**. They don't continuously reconcile.
-A node that drifts from its desired state stays drifted — silently.
+Ansible/cloud-init can do this — once. Then the node drifts silently and nobody notices until the audit.
 
 ---
 
-## Part 4 — LinuxAid: The Bottom Half of the Stack
+## Part 4 — LinuxAid: The Bottom Half Nobody Wanted to Own
 
 ### Slide 9 — Continuous OS Reconciliation
 
-LinuxAid is a Puppet-based OS management tool (built on OpenVox) that applies
-the **same operator philosophy** Juju uses for applications — to the OS:
+LinuxAid (Puppet, built on OpenVox) applies the same "declare it, reconcile it forever" philosophy — to the OS.
 
-> Declare desired state → operator reconciles toward it continuously.
-
-Every 30 minutes, every node pulls its catalog and applies it.
-SSH policy drifted? Fixed. Exporter crashed and stopped? Restarted.
-New node joined? Bootstrap brings it to policy in one agent run.
-
-**Config lives in Git:**
+Every 30 min, every node pulls its catalog and self-corrects.
+SSH drifted? Fixed. Exporter died? Restarted. New node? Converges in one run.
 
 ```
 your-linuxaid-config/
-├── data/
-│   └── global.yaml          # applies to ALL nodes
+├── data/global.yaml        # everyone
 └── agents/
-    ├── node-1.demo.yaml     # role for node-1
-    └── node-2.demo.yaml     # role for node-2
+    ├── node-1.demo.yaml
+    └── node-2.demo.yaml
 ```
 
-Push to Git → r10k deploys → nodes converge.
-No SSH. No Ansible run. No manual step.
+Push to Git → r10k deploys → nodes fall in line. No SSH heroics required.
 
 ---
 
-### Slide 10 — What `role::basic` Gives You
-
-Assign one role to a node:
+### Slide 10 — One Role, Zero Effort: `role::basic`
 
 ```yaml
 # agents/node-1.demo.yaml
@@ -216,296 +166,173 @@ classes:
   - role::basic
 ```
 
-That single line automatically installs and maintains:
+One line buys you:
 
-| What | Why it matters |
-|------|---------------|
-| SSH hardened to policy | No root login, key auth only, idle timeout |
-| Firewall configured | iptables rules declared in hiera, not set manually |
-| Unattended security updates | Patches apply without human intervention |
-| `node_exporter` on `:9100` | CPU, memory, disk, network, load — host metrics |
-| `systemd_exporter` | Every service state — failed units visible in Prometheus |
-| `process_exporter` | Per-process CPU and memory |
-| `iptables_exporter` | Firewall rule hit counts |
+| What | Why |
+|---|---|
+| SSH hardened | No root login, key-only, idle timeout |
+| Firewall | Declared in hiera, not fat-fingered |
+| Unattended security updates | Patches apply while you sleep |
+| `node_exporter` :9100 | Host metrics |
+| `systemd_exporter` | Failed units, visible instantly |
+| `process_exporter` | Per-process CPU/mem |
+| `iptables_exporter` | Firewall hit counts |
 
-Everything applied by the agent. Everything reconciled every 30 minutes.
-Everything traceable to a Git commit.
-
----
-
-## Part 5 — The Perfect Combination
-
-### Slide 11 — Two Operators, One Philosophy, Zero Gaps
-
-This is where the stack becomes a platform.
-
-```
-┌──────────────────────────────────────────────────────────────┐
-│                                                              │
-│   LinuxAid                        Juju                       │
-│   ─────────────────               ────────────────────       │
-│   Owns: the OS                    Owns: the applications     │
-│   Tool: OpenVox (Puppet)          Tool: Charmed Operators    │
-│   Model: Hiera declares state     Model: Juju model declares │
-│   Apply: agent every 30 min       Apply: charm continuously  │
-│                                                              │
-│   ◄─────────── same philosophy ──────────────────────────►  │
-│        Declare desired state. Operator converges.            │
-│                                                              │
-└──────────────────────────────────────────────────────────────┘
-```
-
-**They meet at exactly one point: Prometheus.**
-
-LinuxAid puts `node_exporter` on every host.
-Juju's COS Lite Prometheus scrapes it.
-
-You get host-to-application observability with no manual scrape config,
-no ServiceMonitor to write, no dashboard to build by hand.
+Reconciled every 30 minutes. Traceable to a Git commit. No mystery config.
 
 ---
 
-### Slide 12 — The Full Stack Architecture
+## Part 5 — Where This Stops Being a Cluster and Starts Being a Platform
+
+### Slide 11 — Two Operators, One Philosophy
 
 ```
-┌────────────────────────────────────────────────────────────────────┐
-│  Git: your-linuxaid-config                                         │
-│  Declares: node roles, firewall, exporters, compliance             │
-└─────────────────────────────┬──────────────────────────────────────┘
-                              │ r10k on push
-                              ▼
-                   ┌─────────────────────┐
-                   │   OpenVox Server    │
-                   │  compiles catalog   │
-                   └──────────┬──────────┘
-                              │ agent pull every 30 min
-              ┌───────────────┴───────────────┐
-              ▼                               ▼
-       Linux Node 1                    Linux Node 2
-       ─────────────                   ─────────────
-       SSH hardened                    SSH hardened
-       Firewall managed                Firewall managed
-       node_exporter  :9100 ──────────►               ─────────────┐
-       systemd_exporter      ──────────►               ─────────────┤
-       process_exporter      ──────────►               ─────────────┤
-                                                                     │
-       Juju agent ──────────────────── Juju agent                   │
-       MicroK8s CP                     MicroK8s Worker              │
-              │                               │                      │ scrape
-              └───────────────┬───────────────┘                      │
-                              ▼                                       │
-                   ┌──────────────────────────┐                      │
-                   │     Juju Controller      │                      │
-                   │                          │                      │
-                   │  model: k8s              │                      │
-                   │  └── MicroK8s            │                      │
-                   │                          │                      │
-                   │  model: monitoring       │                      │
-                   │  ├── Prometheus  ◄───────┼──────────────────────┘
-                   │  ├── Grafana             │  host OS metrics
-                   │  ├── Alertmanager        │  + cluster metrics
-                   │  └── Loki               │  in one stack
-                   │                          │
-                   │  model: apps             │
-                   │  ├── PostgreSQL ◄──┐     │
-                   │  └── my-app ───────┘     │  (related — no manual
-                   │                          │   secret management)
-                   └──────────────────────────┘
+LinuxAid                        Juju
+Owns: the OS                    Owns: the apps
+Tool: OpenVox (Puppet)          Tool: Charmed Operators
+Apply: agent, every 30 min      Apply: charm, continuously
+       ◄──── same philosophy ────►
+   Declare desired state. Operator converges. You sleep.
 ```
+
+They meet at exactly one point: **Prometheus.**
+LinuxAid puts `node_exporter` everywhere → Juju's COS Lite scrapes it.
+Host-to-app observability, zero manual ServiceMonitors.
 
 ---
 
-### Slide 13 — Layer Ownership: Clean Boundaries
+### Slide 12 — The Full Stack, One Diagram
 
-The reason this works is that neither tool overreaches.
+```
+Git (LinuxAid config) → OpenVox catalog → agent pulls every 30 min
+      → nodes get: SSH hardened, firewall, node/systemd/process exporters
 
-| Concern | Tool | Boundary |
-|---------|------|---------|
-| SSH policy, firewall, OS packages | LinuxAid | Host OS — Juju doesn't touch this |
-| Prometheus exporters on the host | LinuxAid | Must run on bare metal, not in a pod |
-| OS compliance (CIS / GDPR / NIS2) | LinuxAid | Applied at OS level, agent reconciles |
-| Kubernetes cluster lifecycle | Juju | MicroK8s charm — LinuxAid doesn't touch this |
-| Stateful application deployment | Juju | Charm handles install, scale, upgrade |
-| Cross-application credentials | Juju | Relations — no Secret written by hand |
-| Observability stack | Juju COS Lite | Prometheus + Grafana as charms |
-| Host metrics in that Prometheus | LinuxAid → Juju | The integration point |
+Juju agents on same nodes → MicroK8s cluster
+      → Juju Controller runs 3 models:
+          - k8s: MicroK8s
+          - monitoring: Prometheus ← scrapes host + cluster metrics
+                        Grafana, Alertmanager, Loki
+          - apps: PostgreSQL ↔ my-app (related, no manual secrets)
+```
 
-Every layer has one owner. No layer is unowned. No tool fights the other.
+Two Git repos. Zero manual wiring. One Grafana to rule them all.
 
 ---
 
-### Slide 14 — What Day One Looks Like
+### Slide 13 — Who Owns What (So Nobody Fights)
 
-A brand new node enrolls in this stack:
+| Concern | Owner | Boundary |
+|---|---|---|
+| SSH, firewall, OS packages | LinuxAid | Juju doesn't go near it |
+| Host exporters | LinuxAid | Bare metal, not a pod |
+| OS compliance | LinuxAid | Agent-reconciled |
+| K8s cluster lifecycle | Juju | MicroK8s charm |
+| Stateful apps | Juju | Install/scale/upgrade via charm |
+| Cross-app credentials | Juju | Relations, no hand-written Secrets |
+| Observability stack | Juju (COS Lite) | Prometheus/Grafana as charms |
+| Host metrics *in* that Prometheus | LinuxAid → Juju | The handshake point |
 
-**Step 1 — LinuxAid agent runs (first 30 minutes):**
-- SSH hardened
-- Firewall configured
-- Security updates enabled
-- `node_exporter`, `systemd_exporter`, `process_exporter` installed and running
-- CIS compliance applied
+Every layer, one owner. No turf wars.
 
-**Step 2 — Juju agent registers the node:**
-- Node joins MicroK8s cluster
-- COS Lite Prometheus begins scraping `:9100`
-- Host metrics appear in Grafana dashboards
+---
 
-**Step 3 — Application gets deployed:**
+### Slide 14 — Day One of a New Node
+
+**Minute 0–30 (LinuxAid):** SSH hardened, firewall up, updates on, 3 exporters running, CIS applied.
+
+**Minute 30 (Juju):** Node joins MicroK8s, COS Lite starts scraping `:9100`, metrics show up in Grafana.
+
+**Then:**
 ```
 juju deploy postgresql
 juju deploy my-app
 juju relate my-app postgresql
 ```
-- PostgreSQL running, credentials wired automatically
-- `my-app` connected — zero manual config
+Credentials wired automatically. App connected.
 
-**Total human input: one YAML file + three Juju commands.**
+**Total human effort: one YAML line + three Juju commands.**
 
 ---
 
-## Part 6 — Before vs After
+## Part 6 — Before vs After (a.k.a. Receipts)
 
-### Slide 15 — Scenario: Onboard a New Node
+### Slide 15 — Onboarding a Node
 
-**Without this stack:**
-
+**Old way:**
 ```
-Day 1   Run Ansible playbook manually to harden SSH
-Day 1   Run another playbook to install node_exporter
-Day 1   Add scrape target manually to prometheus.yml
-Day 1   Reload Prometheus — hope it picks up
-Day 2   Realise compliance was skipped — run another playbook
-Day 7   Node drifts — nobody notices
-Day 30  Audit asks for evidence of hardening — grep through bash history
+Day 1   Run Ansible for SSH
+Day 1   Run another Ansible for exporters
+Day 1   Hand-edit prometheus.yml, reload, hope
+Day 2   Realize compliance got skipped, run yet another playbook
+Day 7   Node drifts. Silently. Forever.
+Day 30  Audit asks for evidence — you grep bash history like a caveman
 ```
 
-**With LinuxAid + Juju:**
-
+**New way:**
 ```
-Day 1   Add one line to agents/node-1.yaml in Git
-        SSH hardened, firewall set, 4 exporters running, CIS applied
-        Prometheus scraping — metrics in Grafana
-Day 30  Audit: git log — every change is a commit with author and timestamp
+Day 1   One line in agents/node-1.yaml
+        SSH + firewall + 4 exporters + CIS, done, metrics live
+Day 30  Audit: git log. Every change, every author, every timestamp.
 ```
 
 ---
 
-### Slide 16 — Scenario: Deploy PostgreSQL for Your App
+### Slide 16 — Wiring PostgreSQL to Your App
 
-**Without Juju:**
-
-```
-Step 1   helm install postgresql bitnami/postgresql
-Step 2   kubectl get secret postgresql -o jsonpath=...  → copy password
-Step 3   kubectl create secret my-app-db-creds ...
-Step 4   Edit my-app Deployment: add env vars DB_HOST, DB_USER, DB_PASS
-Step 5   helm upgrade my-app ...
-Step 6   PostgreSQL minor upgrade → new password format → repeat steps 2–5
-Step 7   Add staging environment → repeat all of the above
-```
+**Without Juju:** 7 manual steps involving copy-pasting a password out of a Secret, editing a Deployment, and doing it all over again for staging. You know this pain personally.
 
 **With Juju:**
-
 ```
 juju deploy postgresql
 juju deploy my-app
-juju relate my-app postgresql   ← done
+juju relate my-app postgresql
 ```
-
-Juju creates the user, passes credentials through the relation,
-updates them on upgrade, and maintains the wiring in staging and production identically.
+Done. Upgrades rotate the password for you. Staging looks identical to prod, because it *is* the same relation.
 
 ---
 
-### Slide 17 — Scenario: Debug a Node at 3 AM
+### Slide 17 — Debugging at 3 AM
 
-**Without continuous OS management:**
+**Without LinuxAid:** Alert fires, you SSH in, systemd looks "fine," `node_exporter` has been dead for 6 hours and nobody noticed, your alert was firing on stale data the whole time. Root cause: unknown. Sleep: also unknown.
 
-```
-Alert fires: high load on node-3
-SSH in — systemd units look fine
-Check exporters — node_exporter not running (crashed 6 hours ago, nobody knew)
-Metrics were silently missing — alert triggered on stale data
-Manual restart — metrics return — root cause still unknown
-```
+**With LinuxAid:** Alert fires, Grafana already shows `nginx.service` failed at 02:47, `node_exporter` auto-restarted itself at 02:47. Root cause visible without touching SSH.
 
-**With LinuxAid:**
-
-```
-Alert fires: high load on node-3
-Open Grafana — systemd_exporter shows nginx.service in failed state since 02:47
-node_exporter restarted automatically at 02:47 by LinuxAid agent run
-Root cause visible immediately — no SSH required
-```
-
-The exporter didn't disappear silently because LinuxAid reconciled it.
-The failure was visible in Prometheus because `systemd_exporter` was already there.
+The exporter didn't vanish quietly — LinuxAid caught it before you did.
 
 ---
 
-### Slide 18 — Scenario: Scale from 5 to 50 Nodes
+### Slide 18 — Scaling 5 Nodes to 50
 
-**Without this stack:**
+**Old way:** 45 new VMs, 45× Ansible hardening, 45× exporter installs, hand-edit `prometheus.yml`, reload, pray nothing was missed.
 
+**New way:**
 ```
-Create 45 new VMs
-Run Ansible hardening playbook × 45
-Run Ansible exporter playbook × 45
-Update prometheus.yml with 45 new scrape targets
-Reload Prometheus
-Hope nothing was missed
-```
-
-**With LinuxAid + Juju:**
-
-```
-Provision 45 VMs → linuxaid-install on each
-                    (or cloud-init with one line)
-
-Add 45 lines to agents/ in Git
-Push → r10k deploys → all nodes converge in one agent cycle
-
-juju add-unit microk8s              × however many needed
-Prometheus auto-discovers new targets via static config update
+Provision 45 VMs → linuxaid-install (or one cloud-init line)
+Add 45 lines to agents/ in Git → push → r10k → converged
+juju add-unit microk8s × N
+Prometheus auto-discovers the rest
 ```
 
-Git is the source of truth.
-Nodes converge toward it.
-Scale is a commit, not a campaign.
+Git is truth. Nodes converge to it. Scale is a commit, not a campaign.
 
 ---
 
 ## Part 7 — Key Takeaways
 
-### Slide 19 — What to Remember
+### Slide 19 — What to Actually Remember
 
-1. **Kubernetes is not a platform.**
-   It handles container scheduling. Every other layer is still yours to build.
-
-2. **Juju solves the application layer.**
-   Relations eliminate manual secret passing.
-   Charms eliminate manual day-2 operations.
-   COS Lite wires observability automatically.
-
-3. **But Juju stops at the OS boundary.**
-   Node exporters, SSH policy, firewall, compliance — these live on the host.
-   Something needs to own them continuously, not just at bootstrap.
-
-4. **LinuxAid fills that gap with the same operator philosophy.**
-   Declare state in Git. Agent reconciles every 30 minutes.
-   No drift. No forgotten nodes. No manual SSH.
-
-5. **They meet at Prometheus — and that is the whole point.**
-   When the OS layer and the application layer are both continuously managed
-   and both feeding the same observability stack, you have a real platform.
-   Not a cluster. Not a deployment. A platform.
+1. **Kubernetes schedules containers. That's it.** Everything else is on you.
+2. **Juju owns the app layer.** Relations kill manual secrets. Charms kill manual day-2.
+3. **Juju stops at the OS.** SSH, firewall, exporters, compliance — nobody's covering that by default.
+4. **LinuxAid covers it — same philosophy, different layer.** Git → reconcile → repeat, forever.
+5. **They meet at Prometheus.** OS + app, both self-healing, both feeding one dashboard. That's not a cluster. That's a platform.
 
 ---
 
 ### Slide 20 — References
 
 | Resource | URL |
-|----------|-----|
+|---|---|
 | Juju | https://juju.is |
 | Charmhub | https://charmhub.io |
 | MicroK8s Charm | https://charmhub.io/microk8s |
@@ -522,24 +349,24 @@ Scale is a commit, not a campaign.
 ### Juju Relation Graph (COS Lite)
 
 ```
-microk8s ──────────────── cos-lite
-                            ├── prometheus
-                            │     ├── grafana        (datasource relation)
-                            │     └── alertmanager   (receiver relation)
-                            └── loki
-                                  └── grafana        (datasource relation)
+microk8s ── cos-lite
+              ├── prometheus
+              │     ├── grafana (datasource)
+              │     └── alertmanager (receiver)
+              └── loki
+                    └── grafana (datasource)
 ```
 
-### LinuxAid Hiera Hierarchy (Priority Order)
+### LinuxAid Hiera Priority
 
 | Priority | Scope | Path |
-|----------|-------|------|
-| 1 — highest | Node-specific | `agents/<certname>.yaml` |
+|---|---|---|
+| 1 (highest) | Node-specific | `agents/<certname>.yaml` |
 | 2 | Tag group | `agents/tags/<tag>/*.yaml` |
 | 3 | OS/hardware facts | `facts/os.family=<value>.yaml` |
-| 4 — lowest | Global default | `data/global.yaml` |
+| 4 (lowest) | Global default | `data/global.yaml` |
 
-### role::basic Module Tree
+### `role::basic` Module Tree
 
 ```
 role::basic
